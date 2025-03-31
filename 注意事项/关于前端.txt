@@ -23,4 +23,4 @@ pm2 list
 pm2 stop ragflow-web
 
 # 删除
-pm2 remove ragflow-web
+pm2 delete ragflow-web
