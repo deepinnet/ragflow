@@ -55,7 +55,7 @@ def retrieval(tenant_id):
             page=1,
             page_size=top,
             similarity_threshold=similarity_threshold,
-            vector_similarity_weight=0.3,
+            vector_similarity_weight=0.6,
             top=top,
             rank_feature=label_question(question, [kb])
         )

@@ -1,0 +1,1 @@
+uv sync --python 3.10 --all-extras
