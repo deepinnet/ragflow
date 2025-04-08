@@ -26,4 +26,5 @@ def kg_retrieval(tenant_id):
     req = request.json
     req["use_kg"] = True  # 设置use_kg为True
     logging.info(f"Using knowledge graph retrieval mode, request params: {req}")  # 添加日志，包含请求参数
-    return retrieval(tenant_id)
+    #在 dify_retrieval.py 中，retrieval 函数已经通过装饰器 @apikey_required 和 @validate_request 接收了 tenant_id 参数，当我们再次传入 tenant_id 时，就造成了参数重复
+    return retrieval()  # 不传入tenant_id，让装饰器处理
