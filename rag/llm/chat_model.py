@@ -82,7 +82,7 @@ class Base(ABC):
             return ERROR_CONNECTION
         elif "quota" in error_str or "capacity" in error_str or "credit" in error_str or "billing" in error_str or "limit" in error_str and "rate" not in error_str:
             return ERROR_QUOTA
-        elif "filter" in error_str or "content" in error_str or "policy" in error_str or "blocked" in error_str or "safety" in error_str:
+        elif "filter" in error_str or "content" in error_str or "policy" in error_str or "blocked" in error_str or "safety" in error_str or "inappropriate" in error_str:
             return ERROR_CONTENT_FILTER
         elif "model" in error_str or "not found" in error_str or "does not exist" in error_str or "not available" in error_str:
             return ERROR_MODEL
@@ -110,6 +110,7 @@ class Base(ABC):
                         ans += LENGTH_NOTIFICATION_EN
                 return ans, self.total_token_count(response)
             except Exception as e:
+                logging.exception("chat_model.Base.chat got exception")
                 # Classify the error
                 error_code = self._classify_error(e)
 
@@ -124,7 +125,7 @@ class Base(ABC):
                     # For non-rate limit errors or the last attempt, return an error message
                     if attempt == self.max_retries - 1:
                         error_code = ERROR_MAX_RETRIES
-                    return f"{ERROR_PREFIX}: {error_code} - {str(e)}", 0
+                    return f"{ERROR_PREFIX}: {error_code} - {str(e)}. response: {response}", 0
 
     def chat_streamly(self, system, history, gen_conf):
         if system:
@@ -1586,6 +1587,6 @@ class GPUStackChat(Base):
     def __init__(self, key=None, model_name="", base_url=""):
         if not base_url:
             raise ValueError("Local llm url cannot be None")
-        if base_url.split("/")[-1] != "v1-openai":
-            base_url = os.path.join(base_url, "v1-openai")
+        if base_url.split("/")[-1] != "v1":
+            base_url = os.path.join(base_url, "v1")
         super().__init__(key, model_name, base_url)
