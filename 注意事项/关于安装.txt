@@ -1,0 +1,22 @@
+uv sync --python 3.10 --all-extras # install RAGFlow dependent python modules
+
+如果要安装本地代码依赖
+
+dependencies = [
+    "requests>=2.30.0,<3.0.0",
+    "beartype>=0.18.5,<0.19.0",
+    "pytest>=8.0.0,<9.0.0",
+    "requests-toolbelt>=1.0.0",
+    "python-docx>=1.1.2",
+    "openpyxl>=3.1.5",
+    "python-pptx>=1.0.2",
+    "pillow>=11.1.0",
+    "reportlab>=4.3.1",
+    "lightrag-hku @ file:///Users/yunteng/code/LightRAG"  # 添加这一行
+]
+
+例如 lightrag-hku
+
+则执行命令：
+uv sync --python 3.10 --all-extras --editable .
+关键是 --editable 参数，它告诉 uv 以可编辑模式安装项目，这样才会处理本地路径依赖。

@@ -20,10 +20,12 @@ from copy import deepcopy
 import json_repair
 import pandas as pd
 import trio
+import csv
+from io import StringIO
 
 from api.utils import get_uuid
 from graphrag.query_analyze_prompt import PROMPTS
-from graphrag.utils import get_entity_type2sampels, get_llm_cache, set_llm_cache, get_relation
+from graphrag.utils import get_entity_type2sampels, get_llm_cache, set_llm_cache, get_relation, get_entity_type2sampels_realtime
 from rag.utils import num_tokens_from_string, get_float
 from rag.utils.doc_store_conn import OrderByExpr
 
@@ -42,7 +44,7 @@ class KGSearch(Dealer):
         return response
 
     def query_rewrite(self, llm, question, idxnms, kb_ids):
-        ty2ents = trio.run(lambda: get_entity_type2sampels(idxnms, kb_ids))
+        ty2ents = trio.run(lambda: get_entity_type2sampels_realtime(idxnms, kb_ids))
         hint_prompt = PROMPTS["minirag_query2kwd"].format(query=question,
                                                           TYPE_POOL=json.dumps(ty2ents, ensure_ascii=False, indent=2))
         result = self._chat(llm, hint_prompt, [{"role": "user", "content": "Output:"}], {"temperature": .5})
@@ -66,7 +68,7 @@ class KGSearch(Dealer):
 
     def _ent_info_from_(self, es_res, sim_thr=0.3):
         res = {}
-        flds = ["content_with_weight", "_score", "entity_kwd", "rank_flt", "n_hop_with_weight"]
+        flds = ["content_with_weight", "_score", "entity_kwd", "rank_flt", "n_hop_with_weight", "entity_type_kwd"]
         es_res = self.dataStore.getFields(es_res, flds)
         for _, ent in es_res.items():
             for f in flds:
@@ -80,7 +82,8 @@ class KGSearch(Dealer):
                 "sim": get_float(ent.get("_score", 0)),
                 "pagerank": get_float(ent.get("rank_flt", 0)),
                 "n_hop_ents": json.loads(ent.get("n_hop_with_weight", "[]")),
-                "description": ent.get("content_with_weight", "{}")
+                "description": ent.get("content_with_weight", "{}"),
+                "entity_type_kwd": ent.get("entity_type_kwd", "")
             }
         return res
 
@@ -109,7 +112,7 @@ class KGSearch(Dealer):
         filters = deepcopy(filters)
         filters["knowledge_graph_kwd"] = "entity"
         matchDense = self.get_vector(", ".join(keywords), emb_mdl, 1024, sim_thr)
-        es_res = self.dataStore.search(["content_with_weight", "entity_kwd", "rank_flt"], [], filters, [matchDense],
+        es_res = self.dataStore.search(["content_with_weight", "entity_kwd", "rank_flt", "entity_type_kwd"], [], filters, [matchDense],
                                        OrderByExpr(), 0, N,
                                        idxnms, kb_ids)
         return self._ent_info_from_(es_res, sim_thr)
@@ -133,7 +136,7 @@ class KGSearch(Dealer):
         filters["entity_type_kwd"] = types
         ordr = OrderByExpr()
         ordr.desc("rank_flt")
-        es_res = self.dataStore.search(["entity_kwd", "rank_flt"], [], filters, [], ordr, 0, N,
+        es_res = self.dataStore.search(["entity_kwd", "rank_flt", "entity_type_kwd"], [], filters, [], ordr, 0, N,
                                        idxnms, kb_ids)
         return self._ent_info_from_(es_res, 0)
 
@@ -220,23 +223,52 @@ class KGSearch(Dealer):
 
         ents_from_query = sorted(ents_from_query.items(), key=lambda x: x[1]["sim"] * x[1]["pagerank"], reverse=True)[
                           :ent_topn]
-        rels_from_txt = sorted(rels_from_txt.items(), key=lambda x: x[1]["sim"] * x[1]["pagerank"], reverse=True)[
+        rels_from_txt_new = sorted(rels_from_txt.items(), key=lambda x: x[1]["sim"], reverse=True)[
                         :rel_topn]
 
         ents = []
         relas = []
-        for n, ent in ents_from_query:
-            ents.append({
-                "Entity": n,
-                "Score": "%.2f" % (ent["sim"] * ent["pagerank"]),
-                "Description": json.loads(ent["description"]).get("description", "") if ent["description"] else ""
-            })
-            max_token -= num_tokens_from_string(str(ents[-1]))
-            if max_token <= 0:
-                ents = ents[:-1]
-                break
 
-        for (f, t), rel in rels_from_txt:
+        # 添加实体类型
+        for ent_name in ents_from_types.keys():
+            if ent_name not in [e["Entity"] for e in ents]:
+                # 从 ents_from_types 中获取描述信息
+                ent_info = ents_from_types.get(ent_name, {})
+                description = ""
+                if ent_info and "description" in ent_info:
+                    try:
+                        desc_json = json.loads(ent_info["description"])
+                        description = desc_json.get("description", "")
+                    except:
+                        description = ""
+                
+                ents.append({
+                    "Entity": ent_name,
+                    "EntityType": ent_info.get("entity_type_kwd", ""),
+                    "Score": "1.00",
+                    "Description": description
+                })
+                max_token -= num_tokens_from_string(str(ents[-1]))
+                if max_token <= 0:
+                    ents = ents[:-1]
+                    break
+
+        for n, ent in ents_from_query:
+            if n not in [e["Entity"] for e in ents]:
+                ents.append({
+                    "Entity": n,
+                    "EntityType": ent.get("entity_type_kwd", ""),
+                    "Score": "%.2f" % (ent["sim"] * ent["pagerank"]),
+                    "Description": json.loads(ent["description"]).get("description", "") if ent["description"] else ""
+                })
+                max_token -= num_tokens_from_string(str(ents[-1]))
+                if max_token <= 0:
+                    ents = ents[:-1]
+                    break
+        
+       
+
+        for (f, t), rel in rels_from_txt_new:
             if not rel.get("description"):
                 for tid in tenant_ids:
                     rela = get_relation(tid, kb_ids, f, t)
@@ -262,11 +294,11 @@ class KGSearch(Dealer):
                 break
 
         if ents:
-            ents = "\n---- Entities ----\n{}".format(pd.DataFrame(ents).to_csv())
+            ents = format_data(ents, "Entities")
         else:
             ents = ""
         if relas:
-            relas = "\n---- Relations ----\n{}".format(pd.DataFrame(relas).to_csv())
+            relas = format_data(relas, "Relations")
         else:
             relas = ""
 
@@ -308,6 +340,33 @@ class KGSearch(Dealer):
         if not txts:
             return ""
         return "\n---- Community Report ----\n" + "\n".join(txts)
+
+
+def format_data(data, title):
+    if not data:
+        return ""
+    
+    # 使用Markdown表格格式
+    result = f"\n---- {title} ----\n\n"
+    
+    # 添加表头
+    if title == "Entities":
+        result += "| No. | Entity | EntityType | Score | Description |\n"
+        result += "| --- | --- | --- | --- | --- |\n"
+        for idx, item in enumerate(data, 1):  # 从1开始计数
+            # 确保Description中的换行符被保留
+            description = item['Description'].replace('\n', '\\n') if item['Description'] else ''
+            result += f"| {idx} | {item['Entity']} | {item['EntityType']} | {item['Score']} | {description} |\n"
+    else:  # Relations
+        result += "| No. | From Entity | To Entity | Score | Description |\n"
+        result += "| --- | --- | --- | --- | --- |\n"
+        for idx, item in enumerate(data, 1):  # 从1开始计数
+            # 确保Description中的换行符被保留
+            description = item['Description'].replace('\n', '\\n') if item['Description'] else ''
+            result += f"| {idx} | {item['From Entity']} | {item['To Entity']} | {item['Score']} | {description} |\n"
+    
+    result += "\n"
+    return result
 
 
 if __name__ == "__main__":
