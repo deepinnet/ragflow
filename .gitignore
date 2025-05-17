@@ -45,3 +45,5 @@ nltk_data/
 web/package-lock.json
 nohup.out
 .lh/
+.venv
+docker/data
