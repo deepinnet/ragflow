@@ -14,6 +14,7 @@
 #  limitations under the License.
 #
 from flask import request, jsonify
+import time
 
 from api.db import LLMType
 from api.db.services.knowledgebase_service import KnowledgebaseService
@@ -37,7 +38,7 @@ def retrieval(tenant_id):
     top = int(retrieval_setting.get("top_k", 1024))
 
     try:
-
+        start_time = time.time()
         e, kb = KnowledgebaseService.get_by_id(kb_id)
         if not e:
             return build_error_result(message="Knowledgebase not found!", code=settings.RetCode.NOT_FOUND)
@@ -46,7 +47,9 @@ def retrieval(tenant_id):
             return build_error_result(message="Knowledgebase not found!", code=settings.RetCode.NOT_FOUND)
 
         embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+        logging.info(f"LLM initialization time, kb_id: {kb_id}, time: {time.time() - start_time:.2f}s")
 
+        start_time = time.time()
         ranks = settings.retrievaler.retrieval(
             question,
             embd_mdl,
@@ -59,13 +62,90 @@ def retrieval(tenant_id):
             top=top,
             rank_feature=label_question(question, [kb])
         )
+        logging.info(f"Vector retrieval time, kb_id: {kb_id}, time: {time.time() - start_time:.2f}s")
 
         if use_kg:
+            start_time = time.time()
             ck = settings.kg_retrievaler.retrieval(question,
                                                    [tenant_id],
                                                    [kb_id],
                                                    embd_mdl,
                                                    LLMBundle(kb.tenant_id, LLMType.CHAT))
+            logging.info(f"Knowledge graph retrieval time: {time.time() - start_time:.2f}s")
+            if ck["content_with_weight"]:
+                ranks["chunks"].insert(0, ck)
+
+        records = []
+        for c in ranks["chunks"]:
+            c.pop("vector", None)
+            records.append({
+                "content": c["content_with_weight"],
+                "score": c["similarity"],
+                "title": c["docnm_kwd"],
+                "metadata": {}
+            })
+
+        logging.info(f"records: {records}")
+        return jsonify({"records": records})
+    except Exception as e:
+        if str(e).find("not_found") > 0:
+            return build_error_result(
+                message='No chunk found! Check the chunk status please!',
+                code=settings.RetCode.NOT_FOUND
+            )
+        return build_error_result(message=str(e), code=settings.RetCode.SERVER_ERROR)
+
+
+
+@manager.route('/dify/kg/retrieval', methods=['POST'])  # noqa: F821
+@apikey_required
+@validate_request("knowledge_id", "query")
+def kg_retrieval(tenant_id):
+    req = request.json
+    req["use_kg"] = True
+    logging.info(f"req: {req}")
+    question = req["query"]
+    kb_id = req["knowledge_id"]
+    use_kg = req.get("use_kg", True)
+    retrieval_setting = req.get("retrieval_setting", {})
+    similarity_threshold = float(retrieval_setting.get("score_threshold", 0.0))
+    top = int(retrieval_setting.get("top_k", 1024))
+
+    try:
+        start_time = time.time()
+        e, kb = KnowledgebaseService.get_by_id(kb_id)
+        if not e:
+            return build_error_result(message="Knowledgebase not found!", code=settings.RetCode.NOT_FOUND)
+
+        if kb.tenant_id != tenant_id:
+            return build_error_result(message="Knowledgebase not found!", code=settings.RetCode.NOT_FOUND)
+
+        embd_mdl = LLMBundle(kb.tenant_id, LLMType.EMBEDDING.value, llm_name=kb.embd_id)
+        logging.info(f"LLM initialization time, kb_id: {kb_id}, time: {time.time() - start_time:.2f}s")
+
+        start_time = time.time()
+        ranks = settings.retrievaler.retrieval(
+            question,
+            embd_mdl,
+            kb.tenant_id,
+            [kb_id],
+            page=1,
+            page_size=top,
+            similarity_threshold=similarity_threshold,
+            vector_similarity_weight=0.6,
+            top=top,
+            rank_feature=label_question(question, [kb])
+        )
+        logging.info(f"Vector retrieval time, kb_id: {kb_id}, time: {time.time() - start_time:.2f}s")
+
+        if use_kg:
+            start_time = time.time()
+            ck = settings.kg_retrievaler.retrieval(question,
+                                                   [tenant_id],
+                                                   [kb_id],
+                                                   embd_mdl,
+                                                   LLMBundle(kb.tenant_id, LLMType.CHAT))
+            logging.info(f"Knowledge graph retrieval time, kb_id: {kb_id}, time: {time.time() - start_time:.2f}s")
             if ck["content_with_weight"]:
                 ranks["chunks"].insert(0, ck)
 

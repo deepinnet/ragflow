@@ -366,25 +366,7 @@ async def graph_edge_to_chunk(kb_id, embd_mdl, from_ent_name, to_ent_name, meta,
         "available_int": 0
     }
     chunk["content_sm_ltks"] = rag_tokenizer.fine_grained_tokenize(chunk["content_ltks"])
-    
-    # 从 meta 中获取实体类型信息
-    from_entity_type = meta.get("from_entity_type", "")
-    to_entity_type = meta.get("to_entity_type", "")
-    
-    # 构建包含实体类型的关系描述
-    txt = ""
-    if from_entity_type and to_entity_type:
-        txt = f" {from_ent_name}{from_entity_type}->{to_ent_name}{to_entity_type}"
-    else:
-        txt = f" {from_ent_name}->{to_ent_name}"
-    
-    # 添加日志
-    logging.info("----------------------test------------------------------")
-    logging.info(f"Vector content for edge {from_ent_name}->{to_ent_name}:")
-    logging.info(f"Base text: {txt}")
-    if meta.get("description"):
-        logging.info(f"With description: {txt}: {meta['description']}")
-    logging.info("----------------------------------------------------")
+    txt = f"{from_ent_name}->{to_ent_name}"
     ebd = get_embed_cache(embd_mdl.llm_name, txt)
     if ebd is None:
         ebd, _ = await trio.to_thread.run_sync(lambda: embd_mdl.encode([txt+f": {meta['description']}"]))
@@ -497,12 +479,8 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
         for from_node, to_node in change.added_updated_edges:
             edge_attrs = graph.get_edge_data(from_node, to_node)
             if not edge_attrs:
+                # added_updated_edges could record a non-existing edge if both from_node and to_node participate in nodes merging.
                 continue
-            # 获取节点的类型信息
-            from_node_attrs = graph.nodes[from_node]
-            to_node_attrs = graph.nodes[to_node]
-            edge_attrs["from_entity_type"] = from_node_attrs.get("entity_type", "")
-            edge_attrs["to_entity_type"] = to_node_attrs.get("entity_type", "")
             nursery.start_soon(lambda: graph_edge_to_chunk(kb_id, embd_mdl, from_node, to_node, edge_attrs, chunks))
 
     now = trio.current_time()
@@ -637,41 +615,3 @@ async def rebuild_graph(tenant_id, kb_id, exclude_rebuild=None):
         return None
     graph.graph["source_id"] = sorted(graph.graph["source_id"])
     return graph
-
-
-async def get_entity_type2sampels_realtime(idxnms, kb_ids: list):
-    """
-    实时从知识库中获取实体类型到实体样本的映射
-    返回格式: {entity_type: [entity1, entity2, ...]}
-    """
-    # 查询所有实体
-    es_res = await trio.to_thread.run_sync(lambda: settings.retrievaler.search({
-        "knowledge_graph_kwd": "entity",
-        "kb_id": kb_ids,
-        "size": 10000,
-        "fields": ["entity_kwd", "entity_type_kwd", "rank_flt"]
-    }, idxnms, kb_ids))
-
-    # 按类型分组实体，使用集合去重
-    ty2ents = defaultdict(set)
-    for id in es_res.ids:
-        entity = es_res.field[id]
-        entity_name = entity.get("entity_kwd")
-        entity_type = entity.get("entity_type_kwd")
-        rank = entity.get("rank_flt", 0)
-        
-        if not entity_name or not entity_type:
-            continue
-            
-        # 使用集合存储实体，自动去重
-        ty2ents[entity_type].add((entity_name, rank))
-
-    # 对每个类型的实体按rank排序，并只保留前12个
-    result = defaultdict(list)
-    for ty in ty2ents:
-        # 转换为列表并按rank排序
-        sorted_ents = sorted(ty2ents[ty], key=lambda x: x[1], reverse=True)
-        # 只保留前12个实体
-        result[ty] = [ent[0] for ent in sorted_ents[:12]]
-
-    return result
