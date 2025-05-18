@@ -13,3 +13,39 @@ curl -X PUT "http://10.26.0.87:1200/ragflow_ca2efc3cfc1c11ef8644b7cd9064d1c9" \
   -u elastic:infini_rag_flow
 
 curl -X DELETE "http://10.26.0.87:1200/ragflow_ca2efc3cfc1c11ef8644b7cd9064d1c9" -u elastic:infini_rag_flow
+
+
+--上面都有瑕疵，直接迁移会出现部分字段结构不一样
+
+GET /ragflow_ca2efc3cfc1c11ef8644b7cd9064d1c9/_mapping
+
+"entity_type_kwd": {
+    "type": "text",
+    "fields": {
+        "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+        }
+    }
+}
+
+"entity_type_kwd":{
+      "type":"keyword",
+      "store":true,
+      "similarity":"boolean"
+  },
+
+建议这样做
+
+先搞一个干净的es
+docker stop ragflow-es-01         
+docker rm ragflow-es-01                                                                                                                                                                             
+docker volume rm ragflow_esdata01     
+
+然后界面创建一个知识库，提交一个文档并build，索引和mapping就建立好了
+然后迁移数据
+
+docker run --net=host --rm -ti taskrabbit/elasticsearch-dump \
+  --input=http://elastic:infini_rag_flow@10.26.0.103:1200 \
+  --output=http://elastic:infini_rag_flow@10.26.0.87:1200 \
+  --type=data
