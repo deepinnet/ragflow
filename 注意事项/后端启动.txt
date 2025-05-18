@@ -1,1 +1,6 @@
 uv sync --python 3.10 --all-extras
+
+bash docker/launch_backend_service.sh 
+
+--调试
+bash docker/launch_backend_service_debug.sh 

@@ -1,0 +1,14 @@
+{
+    "makefile.configureOnOpen": false,
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/api",
+        "${workspaceFolder}/deepdoc",
+        "${workspaceFolder}/graphrag",
+    ],
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "off",
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.importFormat": "relative",
+    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python"
+}

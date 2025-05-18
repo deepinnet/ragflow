@@ -4,6 +4,27 @@ set -x
 # Exit immediately if a command exits with a non-zero status
 # set -e
 
+# Function to load environment variables from .env file
+load_env_file() {
+    # Get the directory of the current script
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local env_file="$script_dir/.env"
+
+    # Check if .env file exists
+    if [ -f "$env_file" ]; then
+        echo "Loading environment variables from: $env_file"
+        # Source the .env file
+        set -a
+        source "$env_file" 
+        set +a
+    else
+        echo "Warning: .env file not found at: $env_file"
+    fi
+}
+
+# Load environment variables
+load_env_file
+
 # Unset HTTP proxies that might be set by Docker daemon
 export http_proxy=""; export https_proxy=""; export no_proxy=""; export HTTP_PROXY=""; export HTTPS_PROXY=""; export NO_PROXY=""
 export PYTHONPATH=$(pwd)
@@ -14,6 +35,8 @@ JEMALLOC_PATH=$(pkg-config --variable=libdir jemalloc)/libjemalloc.so
 # 定义两个进程的调试端口
 PY_DEBUG_task_executor="python3 -m debugpy --log-to-stderr --listen 0.0.0.0:5678"
 PY_DEBUG_ragflow_server="python3 -m debugpy --log-to-stderr --listen 0.0.0.0:5679"
+
+PY=python3
 
 # Set default number of workers if WS is not set or less than 1
 if [[ -z "$WS" || $WS -lt 1 ]]; then
@@ -28,6 +51,9 @@ STOP=false
 
 # Array to keep track of child PIDs
 PIDS=()
+
+# Set the path to the NLTK data directory
+export NLTK_DATA="./nltk_data"
 
 # Function to handle termination signals
 cleanup() {

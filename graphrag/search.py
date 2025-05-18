@@ -82,7 +82,7 @@ class KGSearch(Dealer):
                 "sim": get_float(ent.get("_score", 0)),
                 "pagerank": get_float(ent.get("rank_flt", 0)),
                 "n_hop_ents": json.loads(ent.get("n_hop_with_weight", "[]")),
-                "description": ent.get("content_with_weight", "{}"),
+                 "description": ent.get("content_with_weight", "{}"),
                 "entity_type_kwd": ent.get("entity_type_kwd", "")
             }
         return res
@@ -224,12 +224,13 @@ class KGSearch(Dealer):
 
         ents_from_query = sorted(ents_from_query.items(), key=lambda x: x[1]["sim"] * x[1]["pagerank"], reverse=True)[
                           :ent_topn]
+        # rels_from_txt = sorted(rels_from_txt.items(), key=lambda x: x[1]["sim"] * x[1]["pagerank"], reverse=True)[
+        #                 :rel_topn]
         rels_from_txt_new = sorted(rels_from_txt.items(), key=lambda x: x[1]["sim"], reverse=True)[
-                        :rel_topn]
+                :rel_topn]
 
         ents = []
         relas = []
-
         # 添加实体类型
         for ent_name in ents_from_types.keys():
             if ent_name not in [e["Entity"] for e in ents]:
@@ -253,21 +254,17 @@ class KGSearch(Dealer):
                 if max_token <= 0:
                     ents = ents[:-1]
                     break
-
         for n, ent in ents_from_query:
-            if n not in [e["Entity"] for e in ents]:
-                ents.append({
-                    "Entity": n,
-                    "EntityType": ent.get("entity_type_kwd", ""),
-                    "Score": "%.2f" % (ent["sim"] * ent["pagerank"]),
-                    "Description": json.loads(ent["description"]).get("description", "") if ent["description"] else ""
-                })
-                max_token -= num_tokens_from_string(str(ents[-1]))
-                if max_token <= 0:
-                    ents = ents[:-1]
-                    break
-        
-       
+            ents.append({
+                "Entity": n,
+                "EntityType": ent.get("entity_type_kwd", ""),
+                "Score": "%.2f" % (ent["sim"] * ent["pagerank"]),
+                "Description": json.loads(ent["description"]).get("description", "") if ent["description"] else ""
+            })
+            max_token -= num_tokens_from_string(str(ents[-1]))
+            if max_token <= 0:
+                ents = ents[:-1]
+                break
 
         for (f, t), rel in rels_from_txt_new:
             if not rel.get("description"):
@@ -341,7 +338,6 @@ class KGSearch(Dealer):
         if not txts:
             return ""
         return "\n---- Community Report ----\n" + "\n".join(txts)
-
 
 def format_data(data, title):
     if not data:
