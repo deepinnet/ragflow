@@ -1,6 +1,7 @@
 界面空白，删除下缓存
 (base) root@hd1-3227:~# cd software/ragflow/web/
 (base) root@hd1-3227:~/software/ragflow/web# rm -rf node_modules/.cache
+rm -rf node_modules package-lock.json .cache
 
 npm install
 
@@ -13,6 +14,7 @@ pm2 start npm --name "ragflow-web" -- run dev
 
 # 查看日志
 pm2 logs ragflow-web
+pm2 logs ragflow-web --lines 20
 
 # 查看状态
 pm2 status

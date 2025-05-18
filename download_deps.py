@@ -49,7 +49,7 @@ repos = [
 def download_model(repo_id):
     local_dir = os.path.abspath(os.path.join("huggingface.co", repo_id))
     os.makedirs(local_dir, exist_ok=True)
-    snapshot_download(repo_id=repo_id, local_dir=local_dir, local_dir_use_symlinks=False)
+    snapshot_download(repo_id=repo_id, local_dir=local_dir)
 
 
 if __name__ == "__main__":
@@ -59,17 +59,17 @@ if __name__ == "__main__":
     
     urls = get_urls(args.china_mirrors)
     
-    for url in urls:
-        filename = url.split("/")[-1]
-        print(f"Downloading {url}...")
-        if not os.path.exists(filename):
-            urllib.request.urlretrieve(url, filename)
+    # for url in urls:
+    #     filename = url.split("/")[-1]
+    #     print(f"Downloading {url}...")
+    #     if not os.path.exists(filename):
+    #         urllib.request.urlretrieve(url, filename)
 
     local_dir = os.path.abspath('nltk_data')
     for data in ['wordnet', 'punkt', 'punkt_tab']:
         print(f"Downloading nltk {data}...")
         nltk.download(data, download_dir=local_dir)
 
-    for repo_id in repos:
-        print(f"Downloading huggingface repo {repo_id}...")
-        download_model(repo_id)
+    # for repo_id in repos:
+    #     print(f"Downloading huggingface repo {repo_id}...")
+    #     download_model(repo_id)

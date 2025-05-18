@@ -1,0 +1,15 @@
+—最后的方法：
+docker run --net=host --rm -ti taskrabbit/elasticsearch-dump \
+  --input=http://elastic:infini_rag_flow@10.26.0.103:1200 \
+  --output=http://elastic:infini_rag_flow@10.26.0.87:1200 \
+  --all=true
+
+
+—查询所有索引
+curl -X GET "http://10.26.0.87:1200/_cat/indices?v" -u elastic:infini_rag_flow
+
+curl -X PUT "http://10.26.0.87:1200/ragflow_ca2efc3cfc1c11ef8644b7cd9064d1c9" \
+  -H "Content-Type: application/json" \
+  -u elastic:infini_rag_flow
+
+curl -X DELETE "http://10.26.0.87:1200/ragflow_ca2efc3cfc1c11ef8644b7cd9064d1c9" -u elastic:infini_rag_flow
