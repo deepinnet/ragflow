@@ -186,6 +186,17 @@ class Base(ABC):
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
 
+        # 自动为qwen模型加上enable_thinking=False
+        if "qwen3" in self.model_name.lower():
+            # 兼容extra_body和直接enable_thinking
+            if ("extra_body" not in gen_conf):
+                gen_conf["extra_body"] = gen_conf.get("extra_body", {})
+                gen_conf["extra_body"]["chat_template_kwargs"] = {"enable_thinking": False}
+            elif (not isinstance(gen_conf["extra_body"]["chat_template_kwargs"], dict)):
+                gen_conf["extra_body"]["chat_template_kwargs"] = {"enable_thinking": False}
+            else:
+                gen_conf["extra_body"]["chat_template_kwargs"]["enable_thinking"] = False
+
         # Implement exponential backoff retry strategy
         for attempt in range(self.max_retries):
             try:
@@ -341,6 +352,18 @@ class Base(ABC):
             history.insert(0, {"role": "system", "content": system})
         if "max_tokens" in gen_conf:
             del gen_conf["max_tokens"]
+
+        # 自动为qwen模型加上enable_thinking=False
+        if "qwen3" in self.model_name.lower():
+            # 兼容extra_body和直接enable_thinking
+            if ("extra_body" not in gen_conf):
+                gen_conf["extra_body"] = gen_conf.get("extra_body", {})
+                gen_conf["extra_body"]["chat_template_kwargs"] = {"enable_thinking": False}
+            elif (not isinstance(gen_conf["extra_body"]["chat_template_kwargs"], dict)):
+                gen_conf["extra_body"]["chat_template_kwargs"] = {"enable_thinking": False}
+            else:
+                gen_conf["extra_body"]["chat_template_kwargs"]["enable_thinking"] = False
+            
         ans = ""
         total_tokens = 0
         reasoning_start = False
