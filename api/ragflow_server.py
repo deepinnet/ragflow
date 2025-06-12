@@ -122,6 +122,24 @@ if __name__ == '__main__':
 
     GlobalPluginManager.load_plugins()
 
+    # 预热实体类型缓存
+    try:
+        logging.info("开始预热实体类型缓存...")
+        from graphrag.utils import warmup_entity_type_cache_sync
+        # 在后台线程中预热缓存，避免阻塞主线程
+        def warmup_cache_background():
+            try:
+                time.sleep(5)  # 等待服务完全启动
+                warmup_entity_type_cache_sync()
+            except Exception as e:
+                logging.error(f"后台预热缓存失败: {e}")
+        
+        cache_thread = threading.Thread(target=warmup_cache_background, daemon=True)
+        cache_thread.start()
+        logging.info("缓存预热任务已启动（后台执行）")
+    except Exception as e:
+        logging.warning(f"启动缓存预热失败: {e}")
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 

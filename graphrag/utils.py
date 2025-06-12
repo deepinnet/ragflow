@@ -449,6 +449,16 @@ async def get_graph(tenant_id, kb_id, exclude_rebuild=None):
 async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, change: GraphChange, callback):
     start = trio.current_time()
 
+    # 清理相关的实体类型缓存
+    try:
+        from rag.nlp import search
+        idxnms = [search.index_name(tenant_id)]
+        clear_entity_type_cache(idxnms, [kb_id])
+        if callback:
+            callback(msg=f"已清理知识库 {kb_id} 的实体类型缓存")
+    except Exception as e:
+        logging.warning(f"清理缓存失败: {e}")
+
     await trio.to_thread.run_sync(lambda: settings.docStoreConn.delete({"knowledge_graph_kwd": ["graph", "subgraph"]}, search.index_name(tenant_id), kb_id))
 
     if change.removed_nodes:
@@ -518,6 +528,12 @@ async def set_graph(tenant_id: str, kb_id: str, embd_mdl, graph: nx.Graph, chang
     now = trio.current_time()
     if callback:
         callback(msg=f"set_graph added/updated {len(change.added_updated_nodes)} nodes and {len(change.added_updated_edges)} edges from index in {now - start:.2f}s.")
+
+    # 自动预热缓存
+    try:
+        await check_and_warmup_cache_on_kg_update(tenant_id, kb_id)
+    except Exception as e:
+        logging.warning(f"知识图谱更新后自动预热缓存失败: {e}")
 
 
 def is_continuous_subsequence(subseq, seq):
@@ -637,11 +653,74 @@ async def rebuild_graph(tenant_id, kb_id, exclude_rebuild=None):
     graph.graph["source_id"] = sorted(graph.graph["source_id"])
     return graph
 
-async def get_entity_type2sampels_realtime(idxnms, kb_ids: list):
+def get_entity_type2sampels_cache(idxnms, kb_ids):
+    """获取实体类型样本的缓存"""
+    hasher = xxhash.xxh64()
+    hasher.update(str(sorted(idxnms)).encode("utf-8"))
+    hasher.update(str(sorted(kb_ids)).encode("utf-8"))
+    hasher.update("entity_type2sampels".encode("utf-8"))  # 添加特定前缀避免键冲突
+
+    k = hasher.hexdigest()
+    
+    # 添加调试日志
+    logging.info(f"🔍 查找缓存键: {k}，idxnms: {idxnms}，kb_ids: {kb_ids}")
+    
+    bin = REDIS_CONN.get(k)
+    if not bin:
+        logging.info(f"❌ 缓存未命中，键: {k}")
+        return None
+    try:
+        # Redis配置了decode_responses=True，所以bin已经是字符串，不需要decode
+        if isinstance(bin, bytes):
+            result = json.loads(bin.decode("utf-8"))
+        else:
+            result = json.loads(bin)
+        logging.info(f"✅ 缓存命中，键: {k}，数据类型数: {len(result)}")
+        return result
+    except Exception as e:
+        logging.warning(f"⚠️ 缓存数据解析失败，键: {k}，错误: {e}")
+        return None
+
+
+def set_entity_type2sampels_cache(idxnms, kb_ids, data, expire_seconds=3600):
+    """设置实体类型样本的缓存，默认缓存1小时"""
+    hasher = xxhash.xxh64()
+    hasher.update(str(sorted(idxnms)).encode("utf-8"))
+    hasher.update(str(sorted(kb_ids)).encode("utf-8"))
+    hasher.update("entity_type2sampels".encode("utf-8"))
+
+    k = hasher.hexdigest()
+    
+    # 添加调试日志
+    logging.info(f"💾 设置缓存键: {k}，idxnms: {idxnms}，kb_ids: {kb_ids}，数据类型数: {len(data)}")
+    
+    try:
+        REDIS_CONN.set(k, json.dumps(data, ensure_ascii=False).encode("utf-8"), expire_seconds)
+        logging.info(f"✅ 缓存设置成功，键: {k}，过期时间: {expire_seconds}秒")
+    except Exception as e:
+        logging.error(f"❌ 缓存设置失败，键: {k}，错误: {e}")
+
+
+async def get_entity_type2sampels_realtime(idxnms, kb_ids: list, use_cache: bool = True, cache_expire: int = 3600):
     """
     实时从知识库中获取实体类型到实体样本的映射
     返回格式: {entity_type: [entity1, entity2, ...]}
+    
+    Args:
+        idxnms: 索引名称列表
+        kb_ids: 知识库ID列表
+        use_cache: 是否使用缓存，默认True
+        cache_expire: 缓存过期时间（秒），默认3600秒（1小时）
     """
+    # 如果启用缓存，先尝试从缓存获取
+    if use_cache:
+        cached_data = get_entity_type2sampels_cache(idxnms, kb_ids)
+        if cached_data is not None:
+            logging.info(f"🚀 从缓存获取实体类型样本，kb_ids: {kb_ids}，包含 {len(cached_data)} 种类型")
+            return cached_data
+    
+    logging.info(f"📡 实时查询实体类型样本，kb_ids: {kb_ids}")
+    
     # 查询所有实体
     es_res = await trio.to_thread.run_sync(lambda: settings.retrievaler.search({
         "knowledge_graph_kwd": "entity",
@@ -656,7 +735,16 @@ async def get_entity_type2sampels_realtime(idxnms, kb_ids: list):
         entity = es_res.field[id]
         entity_name = entity.get("entity_kwd")
         entity_type = entity.get("entity_type_kwd")
-        rank = entity.get("rank_flt", 0)
+        rank_raw = entity.get("rank_flt", 0)
+        
+        # 确保rank是数字类型，处理可能的字符串情况
+        try:
+            if isinstance(rank_raw, str):
+                rank = float(rank_raw) if rank_raw else 0.0
+            else:
+                rank = float(rank_raw) if rank_raw is not None else 0.0
+        except (ValueError, TypeError):
+            rank = 0.0
 
         if not entity_name or not entity_type:
             continue
@@ -672,4 +760,181 @@ async def get_entity_type2sampels_realtime(idxnms, kb_ids: list):
         # 只保留前12个实体
         result[ty] = [ent[0] for ent in sorted_ents[:12]]
 
+    # 如果启用缓存，将结果写入缓存
+    if use_cache:
+        set_entity_type2sampels_cache(idxnms, kb_ids, dict(result), cache_expire)
+    
     return result
+
+async def warmup_entity_type_cache(tenant_ids=None, kb_ids=None):
+    """
+    预热实体类型缓存
+    
+    Args:
+        tenant_ids: 指定的租户ID列表，如果为None则查询所有租户
+        kb_ids: 指定的知识库ID列表，如果为None则查询所有知识库
+    """
+    from api.db.services.knowledgebase_service import KnowledgebaseService
+    import trio
+    
+    logging.info("开始预热实体类型缓存...")
+    
+    try:
+        # 如果没有指定租户和知识库，查询所有活跃的
+        if tenant_ids is None:
+            # 获取所有租户
+            tenant_ids = []
+            try:
+                from api.db.services.user_service import TenantService
+                # 获取所有租户
+                tenants = TenantService.get_all()
+                tenant_ids = [t.id for t in tenants if t and hasattr(t, 'id')]
+                logging.info(f"找到 {len(tenant_ids)} 个租户")
+            except Exception as e:
+                logging.warning(f"获取租户列表失败: {e}")
+                # 如果获取租户失败，尝试从知识库直接获取
+                try:
+                    kbs = await trio.to_thread.run_sync(lambda: KnowledgebaseService.get_all())
+                    tenant_ids = list(set([kb['tenant_id'] for kb in kbs if kb and 'tenant_id' in kb]))
+                    logging.info(f"从知识库获取到 {len(tenant_ids)} 个租户")
+                except Exception as e2:
+                    logging.warning(f"从知识库获取租户也失败: {e2}")
+                    return
+        
+        if kb_ids is None:
+            # 获取指定租户下的所有知识库
+            kb_ids = []
+            try:
+                # 使用更简单的方法获取所有知识库ID
+                all_kb_ids = await trio.to_thread.run_sync(lambda: KnowledgebaseService.get_all_ids())
+                kb_ids = all_kb_ids
+                logging.info(f"找到 {len(kb_ids)} 个知识库")
+            except Exception as e:
+                logging.warning(f"获取知识库列表失败: {e}")
+                # 如果失败，尝试按租户获取
+                try:
+                    for tenant_id in tenant_ids:
+                        kbs = await trio.to_thread.run_sync(lambda: KnowledgebaseService.get_by_tenant_id(tenant_id))
+                        kb_ids.extend([kb['id'] for kb in kbs if kb and 'id' in kb])
+                    logging.info(f"通过租户找到 {len(kb_ids)} 个知识库")
+                except Exception as e2:
+                    logging.warning(f"通过租户获取知识库也失败: {e2}")
+                    return
+        
+        # 如果还是没有知识库，直接返回
+        if not kb_ids:
+            logging.info("没有找到知识库，跳过缓存预热。这是正常的，如果系统中还没有创建任何知识库的话。")
+            return
+        
+        # 为每个租户预热缓存
+        warmed_count = 0
+        for tenant_id in tenant_ids:
+            try:
+                from rag.nlp import search
+                idxnms = [search.index_name(tenant_id)]
+                
+                # 获取该租户下的知识库
+                tenant_kb_ids = []
+                try:
+                    # 使用正确的方法获取租户下的知识库ID
+                    all_tenant_kb_ids = await trio.to_thread.run_sync(lambda: KnowledgebaseService.get_kb_ids(tenant_id))
+                    # 只保留在总的知识库列表中的ID
+                    tenant_kb_ids = [kb_id for kb_id in all_tenant_kb_ids if kb_id in kb_ids]
+                    logging.info(f"租户 {tenant_id} 下找到 {len(tenant_kb_ids)} 个相关知识库")
+                except Exception as e:
+                    logging.warning(f"获取租户 {tenant_id} 的知识库失败: {e}")
+                    continue
+                
+                if tenant_kb_ids:
+                    # 为每个知识库单独预热缓存
+                    warmed_kb_count = 0
+                    for kb_id in tenant_kb_ids:
+                        try:
+                            result = await get_entity_type2sampels_realtime(idxnms, [kb_id], use_cache=True)
+                            if result:
+                                entity_types = len(result)
+                                total_entities = sum(len(ents) for ents in result.values())
+                                warmed_kb_count += 1
+                                logging.info(f"已预热知识库 {kb_id}，包含 {entity_types} 种类型，{total_entities} 个实体")
+                            else:
+                                logging.info(f"知识库 {kb_id} 暂无实体数据")
+                        except Exception as single_cache_e:
+                            logging.warning(f"预热知识库 {kb_id} 缓存失败: {single_cache_e}")
+                    
+                    if warmed_kb_count > 0:
+                        warmed_count += 1
+                        logging.info(f"租户 {tenant_id} 共预热 {warmed_kb_count} 个知识库的缓存")
+                else:
+                    logging.info(f"租户 {tenant_id} 没有相关的知识库，跳过")
+                    
+            except Exception as e:
+                logging.warning(f"预热租户 {tenant_id} 缓存失败: {e}")
+                continue
+        
+        logging.info(f"缓存预热完成，共预热 {warmed_count} 个租户的缓存")
+        
+    except Exception as e:
+        logging.error(f"缓存预热过程中出现错误: {e}")
+
+
+def warmup_entity_type_cache_sync(tenant_ids=None, kb_ids=None):
+    """
+    同步版本的缓存预热函数，供主线程调用
+    """
+    import trio
+    try:
+        trio.run(lambda: warmup_entity_type_cache(tenant_ids, kb_ids))
+    except Exception as e:
+        logging.error(f"同步预热缓存失败: {e}")
+
+
+def clear_entity_type_cache(idxnms=None, kb_ids=None):
+    """
+    清理实体类型缓存
+    
+    Args:
+        idxnms: 索引名称列表，如果为None则清理所有
+        kb_ids: 知识库ID列表，如果为None则清理所有
+    """
+    if idxnms is None or kb_ids is None:
+        # 如果没有指定参数，这里可以实现清理所有缓存的逻辑
+        # 但需要小心，避免影响其他缓存
+        logging.warning("未指定具体参数，跳过缓存清理")
+        return
+    
+    try:
+        hasher = xxhash.xxh64()
+        hasher.update(str(sorted(idxnms)).encode("utf-8"))
+        hasher.update(str(sorted(kb_ids)).encode("utf-8"))
+        hasher.update("entity_type2sampels".encode("utf-8"))
+        
+        k = hasher.hexdigest()
+        REDIS_CONN.delete(k)
+        logging.info(f"已清理实体类型缓存: {kb_ids}")
+    except Exception as e:
+        logging.error(f"清理缓存失败: {e}")
+
+async def check_and_warmup_cache_on_kg_update(tenant_id, kb_id):
+    """
+    在知识图谱更新后检查并预热缓存
+    
+    这个函数在知识图谱更新后自动调用，确保缓存是最新的
+    """
+    try:
+        from rag.nlp import search
+        
+        idxnms = [search.index_name(tenant_id)]
+        
+        # 先清理旧缓存
+        clear_entity_type_cache(idxnms, [kb_id])
+        
+        # 异步预热新缓存
+        result = await get_entity_type2sampels_realtime(idxnms, [kb_id], use_cache=True, cache_expire=3600)
+        
+        if result:
+            entity_types = len(result)
+            total_entities = sum(len(ents) for ents in result.values())
+            logging.info(f"知识图谱更新后，已自动预热知识库 {kb_id} 的缓存，包含 {entity_types} 种实体类型，{total_entities} 个实体")
+        
+    except Exception as e:
+        logging.warning(f"知识图谱更新后预热缓存失败: {e}")

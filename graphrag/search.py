@@ -44,14 +44,39 @@ class KGSearch(Dealer):
         return response
 
     def query_rewrite(self, llm, question, idxnms, kb_ids):
-        ty2ents = trio.run(lambda: get_entity_type2sampels_realtime(idxnms, kb_ids))
+        import time
+        rewrite_start = time.time()
+        
+        # Step 1: 获取实体类型样本（使用缓存）
+        step1_start = time.time()
+        ty2ents = trio.run(lambda: get_entity_type2sampels_realtime(idxnms, kb_ids, use_cache=True, cache_expire=3600))
+        step1_time = time.time() - step1_start
+        logging.info(f"[Performance] query_rewrite Step 1 - 获取实体类型样本: {step1_time:.3f}s")
+        
+        # Step 2: 构建提示词
+        step2_start = time.time()
         hint_prompt = PROMPTS["minirag_query2kwd"].format(query=question,
                                                           TYPE_POOL=json.dumps(ty2ents, ensure_ascii=False, indent=2))
+        step2_time = time.time() - step2_start
+        logging.info(f"[Performance] query_rewrite Step 2 - 构建提示词: {step2_time:.3f}s")
+        
+        # Step 3: LLM推理
+        step3_start = time.time()
         result = self._chat(llm, hint_prompt, [{"role": "user", "content": "Output:"}], {"temperature": .5})
+        step3_time = time.time() - step3_start
+        logging.info(f"[Performance] query_rewrite Step 3 - LLM推理: {step3_time:.3f}s")
+        
+        # Step 4: 解析结果
+        step4_start = time.time()
         try:
             keywords_data = json_repair.loads(result)
             type_keywords = keywords_data.get("answer_type_keywords", [])
             entities_from_query = keywords_data.get("entities_from_query", [])[:5]
+            step4_time = time.time() - step4_start
+            logging.info(f"[Performance] query_rewrite Step 4 - 解析结果(成功): {step4_time:.3f}s")
+            
+            total_rewrite_time = time.time() - rewrite_start
+            logging.info(f"[Performance] query_rewrite 总耗时: {total_rewrite_time:.3f}s")
             return type_keywords, entities_from_query
         except json_repair.JSONDecodeError:
             try:
@@ -60,9 +85,19 @@ class KGSearch(Dealer):
                 keywords_data = json_repair.loads(result)
                 type_keywords = keywords_data.get("answer_type_keywords", [])
                 entities_from_query = keywords_data.get("entities_from_query", [])[:5]
+                step4_time = time.time() - step4_start
+                logging.info(f"[Performance] query_rewrite Step 4 - 解析结果(重试成功): {step4_time:.3f}s")
+                
+                total_rewrite_time = time.time() - rewrite_start
+                logging.info(f"[Performance] query_rewrite 总耗时: {total_rewrite_time:.3f}s")
                 return type_keywords, entities_from_query
             # Handle parsing error
             except Exception as e:
+                step4_time = time.time() - step4_start
+                logging.info(f"[Performance] query_rewrite Step 4 - 解析结果(失败): {step4_time:.3f}s")
+                
+                total_rewrite_time = time.time() - rewrite_start
+                logging.info(f"[Performance] query_rewrite 总耗时: {total_rewrite_time:.3f}s")
                 logging.exception(f"JSON parsing error: {result} -> {e}")
                 raise e
 
@@ -153,6 +188,11 @@ class KGSearch(Dealer):
                rel_sim_threshold: float = 0.3,
                   **kwargs
                ):
+        import time
+        start_time = time.time()
+        
+        # Phase 1: 初始化和查询重写
+        phase1_start = time.time()
         qst = question
         filters = self.get_filters({"kb_ids": kb_ids})
         if isinstance(tenant_ids, str):
@@ -166,10 +206,34 @@ class KGSearch(Dealer):
             logging.exception(e)
             ents = [qst]
             pass
+        phase1_time = time.time() - phase1_start
+        logging.info(f"[Performance] Phase 1 - 初始化和查询重写: {phase1_time:.3f}s")
 
+        # Phase 2: 主要检索操作
+        phase2_start = time.time()
+        
+        # 2.1: 基于关键词检索实体
+        ents_keywords_start = time.time()
         ents_from_query = self.get_relevant_ents_by_keywords(ents, filters, idxnms, kb_ids, emb_mdl, ent_sim_threshold)
+        ents_keywords_time = time.time() - ents_keywords_start
+        logging.info(f"[Performance] Phase 2.1 - 基于关键词检索实体: {ents_keywords_time:.3f}s")
+        
+        # 2.2: 基于类型检索实体
+        ents_types_start = time.time()
         ents_from_types = self.get_relevant_ents_by_types(ty_kwds, filters, idxnms, kb_ids, 10000)
+        ents_types_time = time.time() - ents_types_start
+        logging.info(f"[Performance] Phase 2.2 - 基于类型检索实体: {ents_types_time:.3f}s")
+        
+        # 2.3: 基于文本检索关系
+        rels_txt_start = time.time()
         rels_from_txt = self.get_relevant_relations_by_txt(qst, filters, idxnms, kb_ids, emb_mdl, rel_sim_threshold)
+        rels_txt_time = time.time() - rels_txt_start
+        logging.info(f"[Performance] Phase 2.3 - 基于文本检索关系: {rels_txt_time:.3f}s")
+        
+        phase2_time = time.time() - phase2_start
+        logging.info(f"[Performance] Phase 2 - 主要检索操作总计: {phase2_time:.3f}s")
+        # Phase 3: N-hop路径处理
+        phase3_start = time.time()
         nhop_pathes = defaultdict(dict)
         for _, ent in ents_from_query.items():
             nhops = ent.get("n_hop_ents", [])
@@ -186,12 +250,17 @@ class KGSearch(Dealer):
                     else:
                         nhop_pathes[(f, t)]["sim"] = ent["sim"] / (2 + i)
                     nhop_pathes[(f, t)]["pagerank"] = wts[i]
+        phase3_time = time.time() - phase3_start
+        logging.info(f"[Performance] Phase 3 - N-hop路径处理: {phase3_time:.3f}s")
 
         logging.info("Retrieved entities: {}".format(list(ents_from_query.keys())))
         logging.info("Retrieved relations: {}".format(list(rels_from_txt.keys())))
         logging.info("Retrieved entities from types({}): {}".format(ty_kwds, list(ents_from_types.keys())))
         logging.info("Retrieved N-hops: {}".format(list(nhop_pathes.keys())))
 
+        # Phase 4: 评分计算和排序
+        phase4_start = time.time()
+        
         # P(E|Q) => P(E) * P(Q|E) => pagerank * sim
         for ent in ents_from_types.keys():
             if ent not in ents_from_query:
@@ -228,7 +297,11 @@ class KGSearch(Dealer):
         #                 :rel_topn]
         rels_from_txt_new = sorted(rels_from_txt.items(), key=lambda x: x[1]["sim"], reverse=True)[
                 :rel_topn]
+        phase4_time = time.time() - phase4_start
+        logging.info(f"[Performance] Phase 4 - 评分计算和排序: {phase4_time:.3f}s")
 
+        # Phase 5: 结果构建
+        phase5_start = time.time()
         ents = []
         relas = []
         # 添加实体类型
@@ -266,6 +339,8 @@ class KGSearch(Dealer):
                 ents = ents[:-1]
                 break
 
+        # 构建关系数据
+        relation_build_start = time.time()
         for (f, t), rel in rels_from_txt_new:
             if not rel.get("description"):
                 for tid in tenant_ids:
@@ -290,6 +365,8 @@ class KGSearch(Dealer):
             if max_token <= 0:
                 relas = relas[:-1]
                 break
+        relation_build_time = time.time() - relation_build_start
+        logging.info(f"[Performance] Phase 5.1 - 关系数据构建: {relation_build_time:.3f}s")
 
         if ents:
             ents = format_data(ents, "Entities")
@@ -300,11 +377,23 @@ class KGSearch(Dealer):
         else:
             relas = ""
 
+        # 社区检索
+        community_start = time.time()
+        community_content = self._community_retrival_([n for n, _ in ents_from_query], filters, kb_ids, idxnms,
+                                                        comm_topn, max_token)
+        community_time = time.time() - community_start
+        logging.info(f"[Performance] Phase 5.2 - 社区检索: {community_time:.3f}s")
+        
+        phase5_time = time.time() - phase5_start
+        logging.info(f"[Performance] Phase 5 - 结果构建总计: {phase5_time:.3f}s")
+        
+        total_time = time.time() - start_time
+        logging.info(f"[Performance] 总耗时: {total_time:.3f}s")
+
         return {
                 "chunk_id": get_uuid(),
                 "content_ltks": "",
-                "content_with_weight": ents + relas + self._community_retrival_([n for n, _ in ents_from_query], filters, kb_ids, idxnms,
-                                                        comm_topn, max_token),
+                "content_with_weight": ents + relas + community_content,
                 "doc_id": "",
                 "docnm_kwd": "Related content in Knowledge Graph",
                 "kb_id": kb_ids,
