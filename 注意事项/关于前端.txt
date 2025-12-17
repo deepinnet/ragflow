@@ -3,6 +3,8 @@
 (base) root@hd1-3227:~/software/ragflow/web# rm -rf node_modules/.cache
 rm -rf node_modules package-lock.json .cache
 
+cd web
+
 npm install
 
 # 注意，前端应用不要用nohup来做后台启动，会报错，采用pm2的方式可以

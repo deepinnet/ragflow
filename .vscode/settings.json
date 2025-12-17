@@ -10,5 +10,14 @@
     "python.analysis.diagnosticMode": "workspace",
     "python.analysis.autoSearchPaths": true,
     "python.analysis.importFormat": "relative",
-    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python"
+    "python.defaultInterpreterPath": "${workspaceFolder}/backend/.venv/bin/python",
+    "cursorpyright.analysis.autoImportCompletions": true,
+    "cursorpyright.analysis.autoSearchPaths": true,
+    "cursorpyright.analysis.diagnosticMode": "workspace",
+    "cursorpyright.analysis.extraPaths": [
+        "${workspaceFolder}/api",
+        "${workspaceFolder}/deepdoc",
+        "${workspaceFolder}/graphrag"
+    ],
+    "cursorpyright.analysis.typeCheckingMode": "off"
 }

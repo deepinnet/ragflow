@@ -61,7 +61,7 @@ export default {
       review: '来自 500 多条评论',
     },
     header: {
-      knowledgeBase: '知识库',
+      knowledgeBase: '知识库管理',
       chat: '聊天',
       register: '注册',
       signin: '登录',
@@ -84,7 +84,7 @@ export default {
       noMoreData: '没有更多数据了',
     },
     knowledgeDetails: {
-      dataset: '数据集',
+      dataset: '知识文件管理',
       testing: '检索测试',
       configuration: '配置',
       knowledgeGraph: '知识图谱',
@@ -462,7 +462,8 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
       modelTip: '大语言聊天模型',
       modelMessage: '请选择',
       modelEnabledTools: '可用的工具',
-      modelEnabledToolsTip: '请选择一个或多个可供该模型所使用的工具。仅对支持工具调用的模型生效。',
+      modelEnabledToolsTip:
+        '请选择一个或多个可供该模型所使用的工具。仅对支持工具调用的模型生效。',
       freedom: '自由度',
       improvise: '即兴创作',
       precise: '精确',
@@ -1235,11 +1236,11 @@ General：实体和关系提取提示来自 GitHub - microsoft/graphrag：基于
     },
     llmTools: {
       bad_calculator: {
-        name: "计算器",
-        description: "用于计算两个数的和的工具（会给出错误答案）",
+        name: '计算器',
+        description: '用于计算两个数的和的工具（会给出错误答案）',
         params: {
-          a: "第一个数",
-          b: "第二个数",
+          a: '第一个数',
+          b: '第二个数',
         },
       },
     },
