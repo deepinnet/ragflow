@@ -16,7 +16,7 @@
 import json
 import re
 from agent.component.base import ComponentBase, ComponentParamBase
-from jinja2 import Template as Jinja2Template
+from jinja2.sandbox import SandboxedEnvironment
 
 
 class TemplateParam(ComponentParamBase):
@@ -101,7 +101,20 @@ class Template(ComponentBase):
 
             self.make_kwargs(para, kwargs, result)
 
-        template = Jinja2Template(content)
+        # 上游修复：PR #7905 / merge commit 20ab6aad4ab7（“Fix: patch SSTI vulnerability in
+        # template rendering”，已核它只改本文件）。本实例的 RCE 入口就是这个组件。
+        # 注：上游已公布的两份 SSTI 公告都不覆盖本组件，且在本基线（tag_2025_05_18）里无可补点：
+        # CVE-2026-28797(GHSA-vvwj-fvwh-4whx) 指 StringTransform/Message（string_transform.py 本树不存在，
+        # message.py 存在但无 Jinja2 渲染点）；CVE-2026-45312(GHSA-wpg4-h5g2-jxm6) 指
+        # rag/prompts/generator.py 的 citation_prompt()（本树不存在）。全树 grep Jinja2Template/Environment(
+        # 只剩本文件这一处渲染点。
+        # 本组件的 content 是用户可控的 Jinja2 模板，非沙箱 Environment 可以
+        # ``{{ cycler.__init__.__globals__.os.popen(...).read() }}`` 直接拿进程执行（本实例 11-17~11-19 的 RCE 入口）。
+        # 与本实例有意的差异：上游还传了 autoescape=True / undefined=StrictUndefined，
+        # 那会改变输出（文本被 HTML 转义；未定义变量从“空串”变成抛异常后整段模板原样留下）。
+        # 挡住 RCE 的是 sandbox，不是这两个参数，所以这里保持旧渲染语义。
+        env = SandboxedEnvironment()
+        template = env.from_string(content)
 
         try:
             content = template.render(kwargs)
