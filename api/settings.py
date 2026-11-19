@@ -64,7 +64,11 @@ retrievaler = None
 kg_retrievaler = None
 
 # user registration switch
-REGISTER_ENABLED = 1
+# 2026-11-19 入侵整改：默认关闭自助注册（本次入侵的账号全部由 POST /v1/user/register 创建）。
+# 默认值放在代码层而不是只放 docker/.env：实测有人绕过 docker/launch_backend_service.sh
+# 直接 `python3 api/ragflow_server.py` 起服务，那种起法读不到 .env，接口就回到开放态。
+# 需要临时开放时显式设环境变量 REGISTER_ENABLED=1（web 侧 registerEnabled 字段随之变化）。
+REGISTER_ENABLED = 0
 
 
 # sandbox-executor-manager
@@ -84,7 +88,7 @@ def init_settings():
     LLM_FACTORY = LLM.get("factory", "Tongyi-Qianwen")
     LLM_BASE_URL = LLM.get("base_url")
     try:
-        REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "1"))
+        REGISTER_ENABLED = int(os.environ.get("REGISTER_ENABLED", "0"))
     except Exception:
         pass
 
