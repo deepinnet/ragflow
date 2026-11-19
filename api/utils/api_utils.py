@@ -17,6 +17,7 @@ import functools
 import json
 import logging
 import random
+import secrets
 import time
 from base64 import b64encode
 from copy import deepcopy
@@ -36,7 +37,6 @@ from flask import (
 from flask import (
     request as flask_request,
 )
-from itsdangerous import URLSafeTimedSerializer
 from peewee import OperationalError
 from werkzeug.http import HTTP_STATUS_CODES
 
@@ -44,7 +44,7 @@ from api import settings
 from api.constants import REQUEST_MAX_WAIT_SEC, REQUEST_WAIT_SEC
 from api.db.db_models import APIToken
 from api.db.services.llm_service import LLMService, TenantLLMService
-from api.utils import CustomJSONEncoder, get_uuid, json_dumps
+from api.utils import CustomJSONEncoder, json_dumps
 
 requests.models.complexjson.dumps = functools.partial(json.dumps, cls=CustomJSONEncoder)
 
@@ -329,9 +329,25 @@ def get_error_argument_result(message="Invalid arguments"):
     return get_result(code=settings.RetCode.ARGUMENT_ERROR, message=message)
 
 
-def generate_confirmation_token(tenant_id):
-    serializer = URLSafeTimedSerializer(tenant_id)
-    return "ragflow-" + serializer.dumps(get_uuid(), salt=tenant_id)[2:34]
+def generate_confirmation_token(tenant_id=None):
+    """不透明随机 API key / beta token（GHSA-9j5g-g4xm-57w7 / CVE-2025-69286）。
+
+    旧实现：``URLSafeTimedSerializer(tenant_id).dumps(get_uuid(), salt=tenant_id)[2:34]``，
+    其中 ``get_uuid()`` = ``uuid.uuid1().hex``（`api/utils/__init__.py:325-326`）。
+    itsdangerous 的 payload 不加密 ⇒ 任何拿到 token 的人都能解出 **明文 UUIDv1**：
+    48 bit 的 node 在本实例所有 token 上恒定，time 字段就是签发时刻（100 ns 刻度），
+    未知位只剩 clock_seq（14 bit）+ 亚秒偏移；而 API key 与分享用 beta 在同一次请求里
+    相邻生成（`api/apps/system_app.py:206-207`），时间戳只差几微秒。
+    现改用 CSPRNG（``secrets.token_urlsafe(32)``，256 bit），不再与主机/时间相关。
+    token 长度 40 → 51 字符，`api_token.token` 列宽 255（`api/db/db_models.py:735`）容纳；
+    beta 在调用点被截成 32 字符，行为不变。
+    公告核实（2026-11-19，取 repos/infiniflow/ragflow/security-advisories）：GHSA-9j5g-g4xm-57w7 =
+    CVE-2025-69286 “Predictable Token Generation Leading to Authentication Bypass”，critical，
+    受影响范围 ``< 0.20.5``；公告自带的建议是把 ``api/utils/__init__.py`` 里的 uuid1 换成 uuid4。
+    本实现比该建议更严：token 不携带任何结构（256 bit CSPRNG），既不含时间也不含主机信息。
+    tenant_id 参数保留只为兼容调用点（system_app.py:206/207/263、api_app.py:61），不再参与派生。
+    """
+    return "ragflow-" + secrets.token_urlsafe(32)
 
 
 def get_parser_config(chunk_method, parser_config):
