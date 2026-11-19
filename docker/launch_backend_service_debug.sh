@@ -33,8 +33,13 @@ export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/
 JEMALLOC_PATH=$(pkg-config --variable=libdir jemalloc)/libjemalloc.so
 
 # 定义两个进程的调试端口
-PY_DEBUG_task_executor="python3 -m debugpy --log-to-stderr --listen 0.0.0.0:5678"
-PY_DEBUG_ragflow_server="python3 -m debugpy --log-to-stderr --listen 0.0.0.0:5679"
+# 调试监听地址：debugpy 的 --listen 没有任何鉴权，先连上的客户端直接拿到调试会话，
+# 而这两个进程以 root 运行 —— 绑 0.0.0.0 等于把「任意代码执行」开给整个网段和本机所有容器。
+# 默认只绑回环；远程调试请走隧道：ssh -L 5679:127.0.0.1:5679 <host> 然后 IDE 连本地 5679。
+# 确实需要对网段开放时显式指定：DEBUG_BIND_HOST=0.0.0.0 bash docker/launch_backend_service_debug.sh
+DEBUG_BIND_HOST="${DEBUG_BIND_HOST:-127.0.0.1}"
+PY_DEBUG_task_executor="python3 -m debugpy --log-to-stderr --listen ${DEBUG_BIND_HOST}:5678"
+PY_DEBUG_ragflow_server="python3 -m debugpy --log-to-stderr --listen ${DEBUG_BIND_HOST}:5679"
 
 PY=python3
 
